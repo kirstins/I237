@@ -1,10 +1,13 @@
+#include <avr/pgmspace.h>
 #include <stdio.h>
-#include <assert.h>
 #include <avr/io.h>
 #include <util/delay.h>
 #include "uart.h"
+#include "hmi_msg.h"
+#include "print_helper.h"
+#include "../lib/hd44780_111/hd44780.h"
 
-#define __ASSERT_USE_STDERR
+
 #define BLINK_DELAY_MS 100
 
 static inline void init_leds(void)
@@ -21,15 +24,22 @@ static inline void init_leds(void)
     PORTB &= ~_BV(PORTB7);
 }
 
-/* Init error console as stderr in UART1 and print user code info */
-static inline void init_errcon(void)
+/* Init console in UART0 and print user code info */
+static inline void init_con(void)
 {
-    simple_uart1_init();
-    stderr = &simple_uart1_out;
-    fprintf(stderr, "Version: %s built on: %s %s\n",
-            FW_VERSION, __DATE__, __TIME__);
-    fprintf(stderr, "avr-libc version: %s avr-gcc version: %s\n",
-            __AVR_LIBC_VERSION_STRING__, __VERSION__);
+    simple_uart0_init();
+    stdin = stdout = &simple_uart0_io;
+    fprintf_P(stdout, name);
+    fprintf_P(stdout, progVer, FW_VERSION, __DATE__, __TIME__);
+    fprintf_P(stdout, libVer, __AVR_LIBC_VERSION_STRING__, __VERSION__);
+}
+
+static inline void lcd_display_name(void)
+{
+    /*Init lcd and display name*/
+    lcd_init();
+    lcd_clrscr();
+    lcd_puts_P(name);
 }
 
 static inline void blink_leds(void)
@@ -53,18 +63,33 @@ static inline void blink_leds(void)
 
 void main (void)
 {
+    init_con();
     init_leds();
-    init_errcon();
-    /* Test assert - REMOVE IN FUTURE LABS */
-    char *array;
-    uint32_t i = 1;
-    extern int __heap_start, *__brkval;
-    int v;
-    array = malloc( i * sizeof(char));
-    assert(array);
-    /* End test assert */
+    lcd_display_name();
+    /*Prtint ASCII table */
+    print_ascii_tbl (stdout);
+    unsigned char cArray[128] = {0};
+
+    for (unsigned char i = 0; i < sizeof(cArray); i++) {
+        cArray[i] = i;
+    }
+
+    print_for_human(stdout, cArray, sizeof(cArray));
 
     while (1) {
+        int input = 0;
+        fprintf_P(stdout, enter);
+        fscanf(stdin, "%i", &input);
+
+        /*Print number*/
+
+        if (input >= 0 && input <= 9) {
+            fprintf_P(stdout, entered);
+            fprintf_P(stdout, (PGM_P)pgm_read_word(&(list[input])));
+        } else {
+            fprintf_P(stdout, wrong);
+        }
+
         blink_leds();
         /* Test assert - REMOVE IN FUTURE LABS */
         /*
@@ -72,10 +97,6 @@ void main (void)
          * until we have eaten it all and print space between stack and heap.
          * That is how assert works in run-time.
          */
-        array = realloc( array, (i++ * 100) * sizeof(char));
-        fprintf(stderr, "%d\n",
-                (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval));
-        assert(array);
         /* End test assert */
     }
 }
