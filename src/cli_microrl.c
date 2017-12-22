@@ -97,6 +97,7 @@ void cli_print_ascii_tbls(const char *const *argv)
     print_for_human(numarray, sizeof(numarray));
 }
 
+
 void cli_handle_number(const char *const *argv)
 {
     (void) argv;
