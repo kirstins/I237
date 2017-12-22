@@ -10,7 +10,9 @@
 #include "cli_microrl.h"
 #include "print_helper.h"
 
+
 #define NUM_ELEMS(x)        (sizeof(x) / sizeof((x)[0]))
+
 
 void cli_print_help(const char *const *argv);
 void cli_example(const char *const *argv);
