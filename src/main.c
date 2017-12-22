@@ -1,102 +1,101 @@
-#include <avr/pgmspace.h>
+#include <time.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <avr/io.h>
+#include <avr/pgmspace.h>
+#include <avr/interrupt.h>
 #include <util/delay.h>
-#include "uart.h"
 #include "hmi_msg.h"
+#include "cli_microrl.h"
 #include "print_helper.h"
 #include "../lib/hd44780_111/hd44780.h"
+#include "../lib/andygock_avr-uart/uart.h"
+#include "../lib/helius_microrl/microrl.h"
+
+#define UART_BAUD           9600
+#define UART_STATUS_MASK    0x00FF
+#define BLINK_DELAY_MS  1000
+#define LED_GREEN       PORTA2 // Arduino Mega digital pin 24
 
 
-#define BLINK_DELAY_MS 100
+microrl_t rl;
+microrl_t *prl = &rl;
+
 
 static inline void init_leds(void)
 {
-    /* Set port B pin 7 for output for Arduino Mega yellow LED */
-    DDRB |= _BV(DDB7);
-    /* Set port A pin 0 for output for Arduino Mega red LED */
-    DDRA |= _BV(DDA0);
-    /* Set port A pin 2 for output for Arduino Mega green LED */
-    DDRA |= _BV(DDA2);
-    /* Set port A pin 4 for output for Arduino Mega blue LED */
-    DDRA |= _BV(DDA4);
-    /* Turn off yellow LED */
-    PORTB &= ~_BV(PORTB7);
+    /* Set pin 2 of PORTA (ARDUINO mega pin 24) for output for Arduino Mega green LED and set it low */
+    DDRA |= _BV(LED_GREEN);
+    PORTA &= ~(_BV(LED_GREEN));
 }
 
-/* Init console in UART0 and print user code info */
-static inline void init_con(void)
+
+static inline void init_con_uarts(void)
 {
-    simple_uart0_init();
-    stdin = stdout = &simple_uart0_io;
-    fprintf_P(stdout, name);
-    fprintf_P(stdout, progVer, FW_VERSION, __DATE__, __TIME__);
-    fprintf_P(stdout, libVer, __AVR_LIBC_VERSION_STRING__, __VERSION__);
+    uart0_init(UART_BAUD_SELECT(UART_BAUD, F_CPU));
+    uart1_init(UART_BAUD_SELECT(UART_BAUD, F_CPU));
+    uart1_puts_p(PSTR("Console started\r\n"));
 }
 
-static inline void lcd_display_name(void)
+
+static inline void init_con_cli(void)
 {
-    /*Init lcd and display name*/
-    lcd_init();
-    lcd_clrscr();
-    lcd_puts_P(name);
+    uart0_puts_p(NAME);
+    uart0_puts_p(MESSAGE_1);
+    uart0_puts_p(MESSAGE_2);
+    //Call init with ptr to microrl instance and print callback
+    microrl_init(prl, uart0_puts);
+    //Set callback for execute
+    microrl_set_execute_callback(prl, cli_execute);
 }
 
-static inline void blink_leds(void)
+
+static inline void init_sys_timer(void)
 {
-    /* Turn red led on and then off*/
-    PORTA |= _BV(PORTA0);
-    _delay_ms(BLINK_DELAY_MS);
-    PORTA &= ~_BV(PORTA0);
-    _delay_ms(BLINK_DELAY_MS);
-    /* Turn green led on and then off*/
-    PORTA |= _BV(PORTA2);
-    _delay_ms(BLINK_DELAY_MS);
-    PORTA &= ~_BV(PORTA2);
-    _delay_ms(BLINK_DELAY_MS);
-    /* Turn blue led on on and then off*/
-    PORTA |= _BV(PORTA4);
-    _delay_ms(BLINK_DELAY_MS);
-    PORTA &= ~_BV(PORTA4);
-    _delay_ms(BLINK_DELAY_MS);
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCCR1B |= _BV(WGM12); // Turn on CTC (Clear Timer on Compare)
+    TCCR1B |= _BV(CS12); // fCPU/256
+    OCR1A = 62549; // Note that it is actually two registers OCR5AH and OCR5AL
+    TIMSK1 |= _BV(OCIE1A); // Output Compare A Match Interrupt Enable
+}
+
+
+static inline void heartbeat(void)
+{
+    static time_t prev_time;
+    char ascii_buf[11] = {0x00};
+    time_t now = time(NULL);
+
+    if (prev_time != now) {
+        //Print uptime to uart1
+        ltoa(now, ascii_buf, 10);
+        uart1_puts_p(PSTR("Uptime: "));
+        uart1_puts(ascii_buf);
+        uart1_puts_p(PSTR(" s.\r\n"));
+        //Toggle LED
+        PORTA ^= _BV(LED_GREEN);
+        prev_time = now;
+    }
 }
 
 void main (void)
 {
-    init_con();
     init_leds();
-    lcd_display_name();
-    /*Prtint ASCII table */
-    print_ascii_tbl (stdout);
-    unsigned char cArray[128] = {0};
-
-    for (unsigned char i = 0; i < sizeof(cArray); i++) {
-        cArray[i] = i;
-    }
-
-    print_for_human(stdout, cArray, sizeof(cArray));
+    init_con_uarts();
+    init_sys_timer();
+    lcd_init();
+    lcd_puts_P(NAME);
+    init_con_cli();
+    sei();
 
     while (1) {
-        int input = 0;
-        fprintf_P(stdout, enter);
-        fscanf(stdin, "%i", &input);
-
-        /*Print number*/
-
-        if (input >= 0 && input <= 9) {
-            fprintf_P(stdout, entered);
-            fprintf_P(stdout, (PGM_P)pgm_read_word(&(list[input])));
-        } else {
-            fprintf_P(stdout, wrong);
-        }
-
-        blink_leds();
-        /* Test assert - REMOVE IN FUTURE LABS */
-        /*
-         * Increase memory allocated for array by 100 chars
-         * until we have eaten it all and print space between stack and heap.
-         * That is how assert works in run-time.
-         */
-        /* End test assert */
+        heartbeat();
+        microrl_insert_char(prl, (uart0_getc() & UART_STATUS_MASK));
     }
+}
+
+ISR(TIMER1_COMPA_vect)
+{
+    system_tick();
 }
